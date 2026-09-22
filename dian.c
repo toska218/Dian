@@ -5,10 +5,11 @@ int main(void) {
     int ch;
 
     initscr();               /* 初始化 ncurses，接管终端 */
+    raw();                   /* 程序读取Ctrl-Q */
     cbreak;
     keypad(stdscr, TRUE);    /* 开启方向键等特殊按键 */
 
-    while ((ch = getch()) != 27) {   /* Esc */
+    while ((ch = getch()) != 0x11) {   /* Ctrl-Q */
         switch (ch) {
             case KEY_UP:    if (y > 0)          y--; break;
             case KEY_DOWN:  if (y < LINES - 1)  y++; break;
