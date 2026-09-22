@@ -1,22 +1,20 @@
 #include <ncurses.h>
 
 int main(void) {
-    int y = 0, x = 0;   /* 当前光标位置：行 y、列 x */
+    int y = 0, x = 0;        /* 当前光标位置：行 y、列 x */
     int ch;
 
     initscr();               /* 初始化 ncurses，接管终端 */
-    cbreak();                /* 按键立即响应，不用等回车 */
-    noecho();                /* 输入时不自动回显，由我们手动显示 */
+    cbreak;
     keypad(stdscr, TRUE);    /* 开启方向键等特殊按键 */
 
-    while ((ch = getch()) != 27) {   /* 27 是 Esc 键 */
+    while ((ch = getch()) != 27) {   /* Esc */
         switch (ch) {
             case KEY_UP:    if (y > 0)          y--; break;
             case KEY_DOWN:  if (y < LINES - 1)  y++; break;
             case KEY_LEFT:  if (x > 0)          x--; break;
             case KEY_RIGHT: if (x < COLS - 1)   x++; break;
-            default:
-                /* 只处理可打印 ASCII 字符 */
+            default:                            /* 打印字符 */
                 if (ch >= 32 && ch <= 126) {
                     mvaddch(y, x, ch);          /* 在当前位置显示字符 */
                     if (x < COLS - 1) x++;      /* 光标右移一位 */
