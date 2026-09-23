@@ -5,24 +5,24 @@
 
   typedef struct{                               /* 结构体保存文件 */
         char **lines;
-        int row;
+        int count;
         int cap;                                  /* 数组容量 */
    }Buffer;
 
   void Buffer_init(Buffer *b){        		          /* Buffer初始化 */
         b->lines = malloc(b->cap * sizeof(char*));
-        b->row = 0;
+        b->count = 0;
         b->cap = 30;
     }
 
   void 	Buffer_lineadd(Buffer *b,const char *line){		/* 行数超出，容量增加 */
-	if(b->row >= b->cap){
+	if(b->count >= b->cap){
 	  b->cap =* 2;
 	  b->lines = realloc(b->lines, b->cap * sizeof(char*));
         }
-	b->lines[b->row] = malloc(strlen(line) + 1);
-	strcpy(b->lines[b->row], line);
-	b->row++;
+	b->lines[b->count] = malloc(strlen(line) + 1);
+	strcpy(b->lines[b->count], line);
+	b->count++;
     }
 
 
@@ -45,16 +45,17 @@
 
 	fclose(fp);
 
-	if(b->row == 0){
+	if(b->count == 0){
 	  Buffer_lineadd(b, "");
 	}
 	return 0;
-    }
+     }
+
   void Buffer_free(Buffer *b){				/* 释放Buffer */
 	int i;
 	for(i = 0; i<b->row; i++){
 	  free(b->lines[i]);
-	}
+     }
 
   int main(int argc, char **argv) {
 	Buffer buf;
@@ -69,50 +70,46 @@
 	  return 1;
 	}
 
-	int y = 0, x = 0;        /* 当前光标位置：行 y、列 x */
+	int row = 0, col = 0;        /* 当前光标位置：行 y、列 x */
         int ch;
 	int top = 0;		 /* 决定屏幕第一行显示文件中哪一行 */
+	int i;
 
         initscr();               /* 初始化 ncurses，接管终端 */
         raw();                   /* 程序读取Ctrl-Q */
         cbreak;
         keypad(stdscr, TRUE);    /* 开启方向键等特殊按键 */
 
-        while ((ch = getch()) != 0x11) {   /* Ctrl-Q */
-		int line_len;
-		int i;
+        while(1){
+	  if(row < top){		/* 保证光标始终在屏幕内 */
+	    top = row;
+	  }
+	  if(row >= top + LINES){
+	    top = row - LINES + 1;
+	  }
 
-		if(y < top){	 	/* 保证光标所在行在屏幕内 */
-		  top = y;
-		}
-		if(y >= top + LINES){
-		  top = y - LINES + 1;
-		}
+	  erase();			/* 重绘屏幕 */
+	  for(i = 0; i < LINES && top + i < buf.count; i++){
+	    mvaddnstr(i, 0, buf.lines[top + 1], COLS);
+          }
+	  move(row - top, col);
+	  refresh();
 
-		erase();
-		for(i = 0; i < LINES && top + i < buf.row; i++){
-		  mvaddnstr(i, 0, buf.lines[top + i], COLS);
-		}
-
-		move(y - top, x)
-
-                switch (ch) {
-                  case KEY_UP:    if (y > 0)          y--; break;
-                  case KEY_DOWN:  if (y < LINES - 1)  y++; break;
-                  case KEY_LEFT:  if (x > 0)          x--; break;
-                  case KEY_RIGHT: if (x < COLS - 1)   x++; break;
-                  default:                            /* 打印字符 */
-                    if (ch >= 32 && ch <= 126) {
-                       mvaddch(y, x, ch);          /* 在当前位置显示字符 */
-                       if (x < COLS - 1) x++;      /* 光标右移一位 */
-                    }
-                     break;
-                }
-
-            move(y, x);    /* 把光标放到更新后的位置 */
-            refresh();     /* 刷新屏幕 */
+	  ch = getch();
+	  if(ch == 0x11) break;
+          if(ch == KEY_UP && row > 0){
+              row--;
+          }else if(ch == KEY_DOWN && row < buf.count - 1){
+              row++;
+          }else if (ch == KEY_LEFT && col > 0){
+              col--;
+          }else if(ch == KEY_RIGHT && col < strlen(buf.lines[row])){
+              col++;
+          }else if (ch == KEY_RESIZE){		/* 缩放窗口 */
+          }
         }
 
-    endwin();          /* 退出 ncurses，恢复终端 */
-    return 0;
-}
+	endwin();
+	Butter_free(&buf);
+	return 0;
+     }
