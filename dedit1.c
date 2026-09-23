@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <locale.h>
 
   typedef struct{                               /* 结构体保存文件 */
         char **lines;
@@ -10,14 +11,14 @@
    }Buffer;
 
   void Buffer_init(Buffer *b){        		          /* Buffer初始化 */
+	b->cap = 30;
         b->lines = malloc(b->cap * sizeof(char*));
         b->count = 0;
-        b->cap = 30;
     }
 
   void 	Buffer_lineadd(Buffer *b,const char *line){		/* 行数超出，容量增加 */
 	if(b->count >= b->cap){
-	  b->cap =* 2;
+	  b->cap *= 2;
 	  b->lines = realloc(b->lines, b->cap * sizeof(char*));
         }
 	b->lines[b->count] = malloc(strlen(line) + 1);
@@ -26,8 +27,8 @@
     }
 
 
-  void Buffer_read(Buffer *b,const char* filename){
-        FILE *fp = fopen(filename, "r")              /* 读取文件 */
+  int Buffer_read(Buffer *b,const char* filename){
+        FILE *fp = fopen(filename, "r");              /* 读取文件 */
         char buf[1024];                              /* 暂存读取到的每一行 */
         int len;
         if(fp == NULL){
@@ -36,7 +37,7 @@
 
         while(fgets(buf, sizeof(buf), fp) != NULL){
 		len = strlen(buf);
-		while(len > 0 && (buf[len -1] == '\n' || buf[len -1] == 'r')){
+		while(len > 0 && (buf[len -1] == '\n' || buf[len -1] == '\r')){
 			buf[len-1] = '\0';
 			len--;
 		}
@@ -53,8 +54,10 @@
 
   void Buffer_free(Buffer *b){				/* 释放Buffer */
 	int i;
-	for(i = 0; i<b->row; i++){
+	for(i = 0; i<b->count; i++){
 	  free(b->lines[i]);
+	}
+	free(b->lines);
      }
 
   int main(int argc, char **argv) {
@@ -73,11 +76,13 @@
 	int row = 0, col = 0;        /* 当前光标位置：行 y、列 x */
         int ch;
 	int top = 0;		 /* 决定屏幕第一行显示文件中哪一行 */
+	int left = 0;		 /* 决定屏幕第一列显示文件中哪一列 */
 	int i;
+
+	setlocale(LC_ALL, "");
 
         initscr();               /* 初始化 ncurses，接管终端 */
         raw();                   /* 程序读取Ctrl-Q */
-        cbreak;
         keypad(stdscr, TRUE);    /* 开启方向键等特殊按键 */
 
         while(1){
@@ -87,12 +92,24 @@
 	  if(row >= top + LINES){
 	    top = row - LINES + 1;
 	  }
+	  if(col < left){
+	    left = col;
+	  }
+	  if(col >= left + COLS){
+	    left = col - COLS + 1;
+	  }
 
 	  erase();			/* 重绘屏幕 */
 	  for(i = 0; i < LINES && top + i < buf.count; i++){
-	    mvaddnstr(i, 0, buf.lines[top + 1], COLS);
-          }
-	  move(row - top, col);
+	    int line_len = strlen(buf.lines[top + i]);
+
+	    if(left < line_len){
+	      mvaddstr(i, 0, buf.lines[top + i] + left);
+           }else{
+	  mvaddnstr(i, 0, "", 0);
+	   }
+	  }
+	  move(row - top, col - left);
 	  refresh();
 
 	  ch = getch();
@@ -107,9 +124,13 @@
               col++;
           }else if (ch == KEY_RESIZE){		/* 缩放窗口 */
           }
+
+	if(col > strlen(buf.lines[row])){	/* 若此行字数太少，则缩减光标活动范围 */
+	   col = strlen(buf.lines[row]);
+	  }
         }
 
 	endwin();
-	Butter_free(&buf);
+	Buffer_free(&buf);
 	return 0;
      }
