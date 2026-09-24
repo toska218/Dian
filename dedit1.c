@@ -26,6 +26,65 @@
 	b->count++;
     }
 
+  void Buffer_lineinsert(Buffer *b, int row, const char *text){	/* 在第row行插入新行 */
+	int i;
+	if(b->count >= b->cap){
+          b->cap *= 2;
+          b->lines = realloc(b->lines, b->cap * sizeof(char *));
+        }
+	for (i = b->count; i > row; i--){
+        b->lines[i] = b->lines[i - 1];
+        }
+	b->lines[row] = malloc(strlen(text) + 1);
+	strcpy(b->lines[row], text);
+	b->count++;
+    }
+
+  void Buffer_linedel(Buffer *b, int row){			/* 删除第row行 */
+	int i;
+	free(b->lines[row]);
+	for(i = row; i < b->count - 1; i++){
+        b->lines[i] = b->lines[i + 1];
+        }
+	b->count--;
+    }
+
+  void Buffer_charinsert(Buffer *b, int row, int col, char ch){		/* 在(row,col)位置插入一个字符 */
+	int len = strlen(b->lines[row]);
+	b->lines[row] = realloc(b->lines[row], len + 2);
+	memmove(b->lines[row] + col + 1, b->lines[row] + col, len - col + 1);
+	b->lines[row][col] = ch;
+    }
+
+  void Buffer_chardel(Buffer *b, int row, int col){	 	/* 在(row,col)位置删除一个字符 */
+	int len = strlen(b->lines[row]);
+	memmove(b->lines[row] + col, b->lines[row] + col + 1, len - col);
+    }
+
+  void Buffer_line_enter(Buffer *b, int row, int col){		/* 按回车加一行 */
+	char *right = malloc(strlen(b->lines[row]) - col + 1);
+	strcpy(right, b->lines[row] + col);
+	b->lines[row][col] = '\0';
+	b->lines[row] = realloc(b->lines[row], col + 1);
+	Buffer_lineinsert(b, row + 1, right);
+	free(right);
+    }
+
+  void Buffer_headdel(Buffer *b, int row){	    /* 将第row行合并到上一行末尾 */
+	int pre_len = strlen(b->lines[row - 1]);
+	int cur_len = strlen(b->lines[row]);
+	b->lines[row - 1] = realloc(b->lines[row - 1], pre_len + cur_len + 1);
+	strcpy(b->lines[row - 1] + pre_len, b->lines[row]);
+	Buffer_linedel(b, row);
+    }
+
+  void Buffer_taildel(Buffer *b, int row) {	    /* 将第row+1行合并到下一行末尾 */
+	int cur_len = strlen(b->lines[row]);
+	int next_len = strlen(b->lines[row + 1]);
+	b->lines[row] = realloc(b->lines[row], cur_len + next_len + 1);
+	strcpy(b->lines[row] + cur_len, b->lines[row + 1]);
+	Buffer_linedel(b, row + 1);
+    }
 
   int Buffer_read(Buffer *b,const char* filename){
         FILE *fp = fopen(filename, "r");              /* 读取文件 */
@@ -60,6 +119,7 @@
 	free(b->lines);
      }
 
+
   int main(int argc, char **argv) {
 	Buffer buf;
 	if(argc < 2){           			 /* 检查文件输入格式是否正确 */
@@ -83,6 +143,7 @@
 
         initscr();               /* 初始化 ncurses，接管终端 */
         raw();                   /* 程序读取Ctrl-Q */
+	noecho();
         keypad(stdscr, TRUE);    /* 开启方向键等特殊按键 */
 
         while(1){
@@ -104,12 +165,12 @@
 	    int line_len = strlen(buf.lines[top + i]);
 
 	    if(left < line_len){
-	      mvaddstr(i, 0, buf.lines[top + i] + left);
+	      mvaddnstr(i, 0, buf.lines[top + i] + left, COLS);
            }else{
 	  mvaddnstr(i, 0, "", 0);
 	   }
 	  }
-	  move(row - top, col - left);
+	  move(row 	- top, col - left);
 	  refresh();
 
 	  ch = getch();
@@ -122,8 +183,32 @@
               col--;
           }else if(ch == KEY_RIGHT && col < strlen(buf.lines[row])){
               col++;
-          }else if (ch == KEY_RESIZE){		/* 缩放窗口 */
-          }
+          }else if(ch == KEY_RESIZE){		/* 缩放窗口 */
+          }else if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
+	       Buffer_line_enter(&buf, row, col);
+	       row++;
+	       col = 0;
+	  }else if(ch == KEY_BACKSPACE || ch == 127){		/* BACKSPACE键 */
+	        if(col > 0){
+	         Buffer_chardel(&buf, row, col - 1);
+	         col--;
+		}else if(row > 0){
+		 int pre_len = strlen(buf.lines[row - 1]);
+		 Buffer_headdel(&buf, row);
+		 row--;
+		 col = pre_len;
+		}
+	  }else if(ch == KEY_DC){			/* DELETE键位 */
+	        int len = strlen(buf.lines[row]);
+	        if(col < len) {
+                 Buffer_chardel(&buf, row, col);
+                }else if(row < buf.count - 1) {
+                  Buffer_taildel(&buf, row);
+		}
+	  }else if(ch >= 32 && ch <= 126){		/* 输入可打印字符 */
+		Buffer_charinsert(&buf, row, col, ch);
+		col++;
+	  }
 
 	if(col > strlen(buf.lines[row])){	/* 若此行字数太少，则缩减光标活动范围 */
 	   col = strlen(buf.lines[row]);
