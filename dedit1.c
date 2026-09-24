@@ -86,6 +86,49 @@
 	Buffer_linedel(b, row + 1);
     }
 
+  int find_prev(Buffer *b, const char *term, int start_row, int start_col, int *found_row, int *found_col){		/* 向前找term */
+	int i, j;
+	int term_len = strlen(term);
+	if(term_len == 0)
+	  return 0;
+	for(i = start_row; i >= 0; i--){
+          int line_len = strlen(b->lines[i]);
+          int limit = (i == start_row) ? start_col : line_len;
+	  if(limit > line_len)
+	    limit = line_len;
+	  for(j = limit - term_len; j >= 0; j--){
+            if(strncmp(b->lines[i] + j, term, term_len) == 0){
+              *found_row = i;
+              *found_col = j;
+              return 1;
+            }
+          }
+        }
+        return 0;
+    }
+
+  int find_next(Buffer *b, const char *term, int start_row, int start_col, int *found_row, int *found_col){		/* 向后找term */
+	int i;
+	int c = start_col;
+	if(term[0] == '\0')
+	return 0;
+	for(i = start_row; i < b->count; i++){
+          char *p;
+          int line_len = strlen(b->lines[i]);
+	  if(i > start_row)
+	    c = 0;
+          if(c <= line_len){
+            p = strstr(b->lines[i] + c, term);
+            if(p != NULL){
+              *found_row = i;
+              *found_col = p - b->lines[i];
+              return 1;
+            }
+          }
+        }
+        return 0;
+    }
+
   int Buffer_save(Buffer *b, const char *filename){	/* 保存文件 */
 	FILE *fp = fopen(filename, "w");
 	int i;
@@ -133,6 +176,8 @@
      }
 
 
+			/* 主函数 */
+
   int main(int argc, char **argv) {
 	Buffer buf;
 	if(argc < 2){           			 /* 检查文件输入格式是否正确 */
@@ -154,6 +199,12 @@
 	int modified = 0;	 /* 值为1时未保存 */
 	char *filename = argv[1];
 	int confirm_quit = 0;	 /* 是否正在等待确认退出 */
+	int search_mode = 0;
+	char search_buf[256] = "";
+	int search_len = 0;
+	int match_row = -1, match_col = -1;
+	int search_start_row = 0, search_start_col = 0;
+	int screen_h;
 
 	setlocale(LC_ALL, "");
 
@@ -163,11 +214,13 @@
         keypad(stdscr, TRUE);    /* 开启方向键等特殊按键 */
 
         while(1){
+	  screen_h = search_mode ? LINES -2 : LINES - 1;
+
 	  if(row < top){		/* 保证光标始终在屏幕内 */
 	    top = row;
 	  }
-	  if(row >= top + LINES - 1){
-	    top = row - (LINES - 1) + 1;
+	  if(row >= top + screen_h){
+	    top = row - screen_h + 1;
 	  }
 	  if(col < left){
 	    left = col;
@@ -177,62 +230,140 @@
 	  }
 
 	  erase();			/* 重绘屏幕 */
-	  for(i = 0; i < LINES-1 && top + i < buf.count; i++){
+	  for(i = 0; i < screen_h && top + i < buf.count; i++){
 	    int line_len = strlen(buf.lines[top + i]);
 
 	    if(left < line_len){
 	      mvaddnstr(i, 0, buf.lines[top + i] + left, COLS);
-           }else{
+            }else{
 	  mvaddnstr(i, 0, "", 0);
-	   }
-	  }
+	    }
 
-	  if (confirm_quit){			/* 未保存退出 */
-          mvprintw(LINES - 1, 0, " 文件未保存！再按 Ctrl-Q 强制退出，其他键取消 ");
-          }else{
-          mvprintw(LINES - 1, 0, " %s | %s | %d:%d ", filename, modified ? "Modified" : "Saved", row + 1 ,col + 1);
+	  if(search_mode && match_row == top + i){			/* 高亮匹配项 */
+            if(match_col >= left && match_col - left < COLS){
+              attron(A_REVERSE);
+              mvaddnstr(i, match_col - left, search_buf, search_len);
+              attroff(A_REVERSE);
+            }
           }
-	  clrtoeol();
+         }
 
-	  move(row - top, col - left);
-	  refresh();
+           if(search_mode){						/* 搜索时，在状态栏上面一行显示搜索框 */
+	     mvprintw(LINES - 2, 0, "搜索: %s", search_buf);
+	     clrtoeol();
+           }
 
-	  ch = getch();
-	  if(ch == 0x11){			/* 判断退出时是否保存 */
-	    if(modified == 0 || confirm_quit == 1){
-	      break;
-	    }
-	   confirm_quit = 1;
-	   continue;
-	  }
 
-	  if(confirm_quit == 1){		/* 按其他任意键取消退出 */
-	      confirm_quit = 0;
-	      continue;
-	  }
+	 if(confirm_quit){				/* 状态栏 */
+         mvprintw(LINES - 1, 0, " 文件未保存！再按 Ctrl-Q 强制退出，其他键取消 ");
+         }else if(search_mode){
+	  mvprintw(LINES - 1, 0, " SEARCH ");
+	 }else{
+           mvprintw(LINES - 1, 0, " %s | %s | %d:%d ", filename, modified ? "Modified" : "Saved", row + 1 ,col + 1);
+         }
+	 clrtoeol();
 
-	  if(ch == 0x13){			/*  Ctrl+S保存 */
-	    if(Buffer_save(&buf, filename) == 0){
-	      modified = 0;
-	    }
-	    continue;
-	  }
+	 move(row - top, col - left);
+	 refresh();
 
-          if(ch == KEY_UP && row > 0){
-              row--;
-          }else if(ch == KEY_DOWN && row < buf.count - 1){
-              row++;
-          }else if (ch == KEY_LEFT && col > 0){
-              col--;
-          }else if(ch == KEY_RIGHT && col < strlen(buf.lines[row])){
-              col++;
-          }else if(ch == KEY_RESIZE){		/* 缩放窗口 */
-          }else if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
-	       Buffer_line_enter(&buf, row, col);
-	       row++;
-	       col = 0;
-	       modified = 1;
-	  }else if(ch == KEY_BACKSPACE || ch == 127){		/* BACKSPACE键 */
+	 ch = getch();
+
+	 if(ch == 0x11){                        /* 判断退出时是否保存 */
+         if(modified == 0 || confirm_quit == 1){
+           break;
+         }
+         confirm_quit = 1;
+           continue;
+         }
+
+         if(confirm_quit == 1){         /* 按其他任意键取消退出 */
+           confirm_quit = 0;
+           continue;
+         }
+
+
+	 if(search_mode){  		  /* 搜索模式 */
+         if(ch == 0x1b){                  /* Esc 退出搜索 */
+           search_mode = 0;
+           match_row = -1;
+           match_col = -1;
+           continue;
+         }else if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
+           if(search_len > 0 && find_next(&buf, search_buf, search_start_row, search_start_col, &match_row, &match_col)){
+             row = match_row;
+             col = match_col;
+             search_start_row = match_row;
+             search_start_col = match_col + 1;
+           }
+           continue;
+         }else if(ch == 0x10){           /* Ctrl-P 上一个 */
+           if(search_len > 0){
+             int pr = (match_row >= 0) ? match_row : search_start_row;
+             int pc = (match_col >= 0) ? match_col : search_start_col;
+
+             if(find_prev(&buf, search_buf, pr, pc, &match_row, &match_col)){
+               row = match_row;
+               col = match_col;
+               search_start_row = match_row;
+               search_start_col = match_col + 1;
+             }
+          }
+          continue;
+          }else if(ch == KEY_BACKSPACE || ch == 127){
+            if(search_len > 0){
+              search_len--;
+              search_buf[search_len] = '\0';
+              match_row = -1;
+              match_col = -1;
+              search_start_row = row;
+              search_start_col = col;
+            }
+          continue;
+          }else if (ch >= 32 && ch <= 126){
+            if(search_len < 255){
+              search_buf[search_len++] = ch;
+              search_buf[search_len] = '\0';
+              match_row = -1;
+              match_col = -1;
+              search_start_row = row;
+              search_start_col = col;
+           }
+           continue;
+          }else{
+           continue;
+          }
+         }
+
+	 if(ch == 0x13){			/*  Ctrl+S保存 */
+	   if(Buffer_save(&buf, filename) == 0){
+	     modified = 0;
+	   }
+	 continue;
+	 }
+
+         if(ch == KEY_UP && row > 0){
+           row--;
+         }else if(ch == KEY_DOWN && row < buf.count - 1){
+           row++;
+         }else if (ch == KEY_LEFT && col > 0){
+            col--;
+         }else if(ch == KEY_RIGHT && col < strlen(buf.lines[row])){
+             col++;
+         }else if(ch == KEY_RESIZE){		/* 缩放窗口 */
+	 }else if(ch == 0x06){                        /* Ctrl-F进入搜索模式 */
+           search_mode = 1;
+           search_len = 0;
+           search_buf[0] = '\0';
+           match_row = -1;
+           match_col = -1;
+           search_start_row = row;
+           search_start_col = col;
+         }else if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
+	    Buffer_line_enter(&buf, row, col);
+	    row++;
+	    col = 0;
+	    modified = 1;
+	 }else if(ch == KEY_BACKSPACE || ch == 127){		/* BACKSPACE键 */
 	        if(col > 0){
 	         Buffer_chardel(&buf, row, col - 1);
 	         col--;
