@@ -138,6 +138,8 @@
 	int top = 0;		 /* 决定屏幕第一行显示文件中哪一行 */
 	int left = 0;		 /* 决定屏幕第一列显示文件中哪一列 */
 	int i;
+	int modified = 0;	 /* 值为1时未保存 */
+	char *filename = argv[1];
 
 	setlocale(LC_ALL, "");
 
@@ -150,8 +152,8 @@
 	  if(row < top){		/* 保证光标始终在屏幕内 */
 	    top = row;
 	  }
-	  if(row >= top + LINES){
-	    top = row - LINES + 1;
+	  if(row >= top + LINES - 1){
+	    top = row - LINES;
 	  }
 	  if(col < left){
 	    left = col;
@@ -161,7 +163,7 @@
 	  }
 
 	  erase();			/* 重绘屏幕 */
-	  for(i = 0; i < LINES && top + i < buf.count; i++){
+	  for(i = 0; i < LINES-1 && top + i < buf.count; i++){
 	    int line_len = strlen(buf.lines[top + i]);
 
 	    if(left < line_len){
@@ -170,7 +172,17 @@
 	  mvaddnstr(i, 0, "", 0);
 	   }
 	  }
-	  move(row 	- top, col - left);
+
+	  if(modified == 1){
+	  mvprintw(LINES - 1, 0, " %s | %s | %d:%d ", filename, "Modified", row + 1, col + 1);
+	  clrtoeol();
+	  }
+	  if(modified == 0){
+	  mvprintw(LINES - 1, 0, " %s | %s | %d:%d ", filename, "Saved", row + 1 ,col + 1);
+	  clrtoeol();
+	  }
+
+	  move(row - top, col - left);
 	  refresh();
 
 	  ch = getch();
@@ -188,26 +200,32 @@
 	       Buffer_line_enter(&buf, row, col);
 	       row++;
 	       col = 0;
+	       modified = 1;
 	  }else if(ch == KEY_BACKSPACE || ch == 127){		/* BACKSPACE键 */
 	        if(col > 0){
 	         Buffer_chardel(&buf, row, col - 1);
 	         col--;
+		 modified = 1;
 		}else if(row > 0){
 		 int pre_len = strlen(buf.lines[row - 1]);
 		 Buffer_headdel(&buf, row);
 		 row--;
 		 col = pre_len;
+		 modified = 1;
 		}
 	  }else if(ch == KEY_DC){			/* DELETE键位 */
 	        int len = strlen(buf.lines[row]);
 	        if(col < len) {
                  Buffer_chardel(&buf, row, col);
+		 modified = 1;
                 }else if(row < buf.count - 1) {
                   Buffer_taildel(&buf, row);
+		  modified = 1;
 		}
 	  }else if(ch >= 32 && ch <= 126){		/* 输入可打印字符 */
 		Buffer_charinsert(&buf, row, col, ch);
 		col++;
+		modified = 1;
 	  }
 
 	if(col > strlen(buf.lines[row])){	/* 若此行字数太少，则缩减光标活动范围 */
@@ -218,4 +236,4 @@
 	endwin();
 	Buffer_free(&buf);
 	return 0;
-     }
+    }
