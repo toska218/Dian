@@ -86,6 +86,19 @@
 	Buffer_linedel(b, row + 1);
     }
 
+  int Buffer_save(Buffer *b, const char *filename){	/* 保存文件 */
+	FILE *fp = fopen(filename, "w");
+	int i;
+	if(fp == NULL){
+	 return -1;
+	 }
+	for(i = 0; i < b->count; i++){
+	 fprintf(fp, "%s\n",b->lines[i]);
+	 }
+	fclose(fp);
+	return 0;
+    }
+
   int Buffer_read(Buffer *b,const char* filename){
         FILE *fp = fopen(filename, "r");              /* 读取文件 */
         char buf[1024];                              /* 暂存读取到的每一行 */
@@ -140,6 +153,7 @@
 	int i;
 	int modified = 0;	 /* 值为1时未保存 */
 	char *filename = argv[1];
+	int confirm_quit = 0;	 /* 是否正在等待确认退出 */
 
 	setlocale(LC_ALL, "");
 
@@ -153,7 +167,7 @@
 	    top = row;
 	  }
 	  if(row >= top + LINES - 1){
-	    top = row - LINES;
+	    top = row - (LINES - 1) + 1;
 	  }
 	  if(col < left){
 	    left = col;
@@ -173,20 +187,37 @@
 	   }
 	  }
 
-	  if(modified == 1){
-	  mvprintw(LINES - 1, 0, " %s | %s | %d:%d ", filename, "Modified", row + 1, col + 1);
+	  if (confirm_quit){			/* 未保存退出 */
+          mvprintw(LINES - 1, 0, " 文件未保存！再按 Ctrl-Q 强制退出，其他键取消 ");
+          }else{
+          mvprintw(LINES - 1, 0, " %s | %s | %d:%d ", filename, modified ? "Modified" : "Saved", row + 1 ,col + 1);
+          }
 	  clrtoeol();
-	  }
-	  if(modified == 0){
-	  mvprintw(LINES - 1, 0, " %s | %s | %d:%d ", filename, "Saved", row + 1 ,col + 1);
-	  clrtoeol();
-	  }
 
 	  move(row - top, col - left);
 	  refresh();
 
 	  ch = getch();
-	  if(ch == 0x11) break;
+	  if(ch == 0x11){			/* 判断退出时是否保存 */
+	    if(modified == 0 || confirm_quit == 1){
+	      break;
+	    }
+	   confirm_quit = 1;
+	   continue;
+	  }
+
+	  if(confirm_quit == 1){		/* 按其他任意键取消退出 */
+	      confirm_quit = 0;
+	      continue;
+	  }
+
+	  if(ch == 0x13){			/*  Ctrl+S保存 */
+	    if(Buffer_save(&buf, filename) == 0){
+	      modified = 0;
+	    }
+	    continue;
+	  }
+
           if(ch == KEY_UP && row > 0){
               row--;
           }else if(ch == KEY_DOWN && row < buf.count - 1){
