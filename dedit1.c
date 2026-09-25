@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <locale.h>
 
+
   typedef struct{                               /* 结构体保存文件 */
         char **lines;
         int count;
@@ -129,7 +130,7 @@
         return 0;
     }
 
-  void Buffer_replace(Buffer *b, int row, int col, int old_len, const char *repl) {	/* 把第 row 行从 col 开始、长度为 old_len 的内容替换成 repl */
+  void buffer_replace(Buffer *b, int row, int col, int old_len, const char *repl) {	/* 把第 row 行从 col 开始、长度为 old_len 的内容替换成 repl */
 	int line_len = strlen(b->lines[row]);
 	int repl_len = strlen(repl);
 	int new_len = line_len - old_len + repl_len;
@@ -187,6 +188,164 @@
 	free(b->lines);
      }
 
+  char *clipboard = NULL;
+
+  void clipboard_set(const char *text){
+    if(clipboard != NULL){
+        free(clipboard);
+        clipboard = NULL;
+    }
+    if(text == NULL)
+        return;
+    clipboard = malloc(strlen(text) + 1);
+    strcpy(clipboard, text);
+  }
+  void sel_normalize(int *r1, int *c1, int *r2, int *c2){       /* 把选区规范成(r1,c1)在(r2,c2)之前 */
+     if(*r1 > *r2 || (*r1 == *r2 && *c1 > *c2)){
+        int tr = *r1, tc = *c1;
+        *r1 = *r2; *c1 = *c2;
+        *r2 = tr; *c2 = tc;
+    }
+  }
+
+  char *selection_get(Buffer *b, int r1, int c1, int r2, int c2){       /* 取出选区文本，跨行用\n连接 */
+    char *out, *p;
+    int total, r;
+
+    sel_normalize(&r1, &c1, &r2, &c2);
+
+    if(r1 == r2){
+        out = malloc(c2 - c1 + 1);
+        memcpy(out, b->lines[r1] + c1, c2 - c1);
+        out[c2 - c1] = '\0';
+        return out;
+    }
+
+    total = strlen(b->lines[r1]) - c1 + 1;
+    for(r = r1 + 1; r < r2; r++){
+        total += strlen(b->lines[r]) + 1;
+    }
+    total += c2;
+
+    out = malloc(total + 1);
+    p = out;
+
+    strcpy(p, b->lines[r1] + c1);
+    p += strlen(b->lines[r1]) - c1;
+    *p++ = '\n';
+
+    for(r = r1 + 1; r < r2; r++){
+        strcpy(p, b->lines[r]);
+        p += strlen(b->lines[r]);
+        *p++ = '\n';
+    }
+
+    memcpy(p, b->lines[r2], c2);
+    p += c2;
+    *p = '\0';
+    return out;
+  }
+
+  void buffer_insert_text(Buffer *b, int row, int col, const char *text){       /* 在(row, col)插入一串不含换行的文字 */
+      int old_len = strlen(b->lines[row]);
+      int add_len = strlen(text);
+      b->lines[row] = realloc(b->lines[row], old_len + add_len + 1);
+      memmove(b->lines[row] + col + add_len, b->lines[row] + col, old_len - col + 1);
+      memcpy(b->lines[row] + col, text, add_len);
+  }
+
+  void buffer_delete_range(Buffer *b, int r1, int c1, int r2, int c2){          /* 删除选区 */
+      int k;
+
+      sel_normalize(&r1, &c1, &r2, &c2);
+
+      if(r1 == r2){
+        int len = strlen(b->lines[r1]);
+        memmove(b->lines[r1] + c1, b->lines[r1] + c2, len - c2 + 1);
+        return;
+      }
+
+    {
+        int head_len = c1;
+        int tail_len = strlen(b->lines[r2]) - c2;
+        char *new_first = malloc(head_len + tail_len + 1);
+
+        memcpy(new_first, b->lines[r1], head_len);
+        strcpy(new_first + head_len, b->lines[r2] + c2);
+
+        free(b->lines[r1]);
+        b->lines[r1] = new_first;
+    }
+
+    for(k = r1 + 1; k <= r2; k++){
+        Buffer_linedel(b, r1 + 1);
+    }
+  }
+
+  void buffer_paste(Buffer *b, int *row, int *col, const char *text) {
+       int n = 0, i;
+       char **parts;
+       const char *p, *start;
+       if(text == NULL || text[0] == '\0')
+         return;
+       for(p = text; *p; p++){
+        if(*p == '\n')
+          n++;
+        }
+        if(n == 0){
+        buffer_insert_text(b, *row, *col, text);
+        *col += strlen(text);
+        return;
+        }
+
+       parts = malloc((n + 1) * sizeof(char *));
+       start = text;
+       for(i = 0; i <= n; i++){
+        const char *nl = strchr(start, '\n');
+        int len = nl ? (int)(nl - start) : (int)strlen(start);
+        parts[i] = malloc(len + 1);
+        memcpy(parts[i], start, len);
+        parts[i][len] = '\0';
+        start = nl ? nl + 1 : start + len;
+       }
+
+    {
+        int prefix_len = *col;
+        char *suffix = malloc(strlen(b->lines[*row]) - prefix_len + 1);
+        strcpy(suffix, b->lines[*row] + prefix_len);
+
+        {
+            char *newline = malloc(prefix_len + strlen(parts[0]) + 1);
+            memcpy(newline, b->lines[*row], prefix_len);
+            strcpy(newline + prefix_len, parts[0]);
+            free(b->lines[*row]);
+            b->lines[*row] = newline;
+        }
+
+        for(i = 1; i <= n; i++){
+            char *line;
+            if(i == n){
+              line = malloc(strlen(parts[i]) + strlen(suffix) + 1);
+              strcpy(line, parts[i]);
+              strcat(line, suffix);
+            }else{
+              line = malloc(strlen(parts[i]) + 1);
+              strcpy(line, parts[i]);
+            }
+            Buffer_lineinsert(b, *row + i, line);
+            free(line);
+        }
+
+        *row += n;
+        *col = strlen(parts[n]);
+        free(suffix);
+    }
+
+    for (i = 0; i <= n; i++) free(parts[i]);
+    free(parts);
+  }
+
+
 
 			/* 主函数 */
 
@@ -225,6 +384,8 @@
 	int replace_repl_len = 0;
 	int rep_match_row = -1, rep_match_col = -1;
 	int rep_start_row = 0, rep_start_col = 0;
+	int sel_active = 0;
+        int sel_anchor_row = 0, sel_anchor_col = 0;
 
 	setlocale(LC_ALL, "");
 
@@ -284,9 +445,6 @@
              mvprintw(LINES - 2, 0, "Y=替换 N=跳过 A=全部 Enter/Ctrl-P=切换 Esc=退出");
            }
            clrtoeol();
-         }else if (search_mode){
-           mvprintw(LINES - 2, 0, "搜索: %s", search_buf);
-           clrtoeol();
          }
 
 		/* 状态栏 */
@@ -298,7 +456,7 @@
 	 if(confirm_quit){
            mvprintw(LINES - 1, 0, " 文件未保存！再按 Ctrl-Q 强制退出，其他键取消 ");
          }else if(replace_mode){
-	   mvprintw(LINES - 1, 0 " REPLACE ");
+	   mvprintw(LINES - 1, 0, " REPLACE ");
 	 }else if(search_mode){
 	   mvprintw(LINES - 1, 0, " SEARCH ");
 	 }else{
@@ -500,23 +658,68 @@
          }else if(ch == KEY_RESIZE){		/* 缩放窗口 */
 	   resizeterm(0, 0);			/* 重新读取终端大小 */
    	   clear();
-	 }else if(ch == 0x12){               /* Ctrl-R 进入替换 */
-    	   replace_mode = 1;
-    	   replace_phase = 0;
-           replace_search_len = 0;
-   	   replace_search[0] = '\0';
-   	   replace_repl_len = 0;
-   	   replace_repl[0] = '\0';
-     	   rep_match_row = -1;
-           rep_match_col = -1;
+	 }else if(ch == KEY_SLEFT || ch == KEY_SRIGHT || ch == KEY_SR || ch == KEY_SF){
+           if(!sel_active){
+             sel_active = 1;
+             sel_anchor_row = row;
+       	     sel_anchor_col = col;
+           }
+	   if(ch == KEY_SLEFT && col > 0){
+             col--;
+           }else if(ch == KEY_SRIGHT && col < strlen(buf.lines[row])){
+             col++;
+           }else if(ch == KEY_SR && row > 0){
+             row--;
+           }else if(ch == KEY_SF && row < buf.count - 1){
+             row++;
+           }
+
+          if(col > strlen(buf.lines[row]))
+	  col = strlen(buf.lines[row]);
+
+        }else if(ch == 0x03){                    /* Ctrl-C 复制 */
+          if(sel_active){
+          int r1 = sel_anchor_row, c1 = sel_anchor_col, r2 = row, c2 = col;
+          char *sel = selection_get(&buf, r1, c1, r2, c2);
+          clipboard_set(sel);
+          free(sel);
+          sel_active = 0;
+          }
+        }else if(ch == 0x18){                    /* Ctrl-X 剪切 */
+          if(sel_active){
+          int r1 = sel_anchor_row, c1 = sel_anchor_col, r2 = row, c2 = col;
+          char *sel = selection_get(&buf, r1, c1, r2, c2);
+          clipboard_set(sel);
+          free(sel);
+
+          buffer_delete_range(&buf, r1, c1, r2, c2);
+          row = r1;
+          col = c1;
+          modified = 1;
+          sel_active = 0;
+          }
+        }else if(ch == 0x16){                    /* Ctrl-V 粘贴 */
+          if(clipboard != NULL){
+          buffer_paste(&buf, &row, &col, clipboard);
+          modified = 1;
+          }
+	}else if(ch == 0x12){               /* Ctrl-R 进入替换 */
+    	  replace_mode = 1;
+    	  replace_phase = 0;
+          replace_search_len = 0;
+   	  replace_search[0] = '\0';
+          replace_repl_len = 0;
+  	  replace_repl[0] = '\0';
+     	  rep_match_row = -1;
+          rep_match_col = -1;
 	 }else if(ch == 0x06){                        /* Ctrl-F进入搜索模式 */
-           search_mode = 1;
-           search_len = 0;
-           search_buf[0] = '\0';
-           match_row = -1;
-           match_col = -1;
-           search_start_row = row;
-           search_start_col = col;
+          search_mode = 1;
+          search_len = 0;
+          search_buf[0] = '\0';
+          match_row = -1;
+          match_col = -1;
+          search_start_row = row;
+          search_start_col = col;
          }else if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
 	    Buffer_line_enter(&buf, row, col);
 	    row++;
