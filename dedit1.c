@@ -129,6 +129,18 @@
         return 0;
     }
 
+  void Buffer_replace(Buffer *b, int row, int col, int old_len, const char *repl) {	/* 把第 row 行从 col 开始、长度为 old_len 的内容替换成 repl */
+	int line_len = strlen(b->lines[row]);
+	int repl_len = strlen(repl);
+	int new_len = line_len - old_len + repl_len;
+	char *newline = malloc(new_len + 1);
+	memcpy(newline, b->lines[row], col);                			       /* 前面部分 */
+	memcpy(newline + col, repl, repl_len);               			       /* 替换内容 */
+	strcpy(newline + col + repl_len, b->lines[row] + col + old_len);               /* 后面部分 */
+	free(b->lines[row]);
+	b->lines[row] = newline;
+    }
+
   int Buffer_save(Buffer *b, const char *filename){	/* 保存文件 */
 	FILE *fp = fopen(filename, "w");
 	int i;
@@ -205,6 +217,14 @@
 	int match_row = -1, match_col = -1;
 	int search_start_row = 0, search_start_col = 0;
 	int screen_h;
+	int replace_mode = 0;
+	int replace_phase = 0;       /* 0=输入查找词 1=输入替换词 2=逐个确认 */
+	char replace_search[256] = "";
+	char replace_repl[256] = "";
+	int replace_search_len = 0;
+	int replace_repl_len = 0;
+	int rep_match_row = -1, rep_match_col = -1;
+	int rep_start_row = 0, rep_start_col = 0;
 
 	setlocale(LC_ALL, "");
 
@@ -214,7 +234,7 @@
         keypad(stdscr, TRUE);    /* 开启方向键等特殊按键 */
 
         while(1){
-	  screen_h = search_mode ? LINES -2 : LINES - 1;
+	  screen_h = (search_mode || replace_mode) ? LINES -2 : LINES - 1;
 
 	  if(row < top){		/* 保证光标始终在屏幕内 */
 	    top = row;
@@ -246,22 +266,46 @@
               attroff(A_REVERSE);
             }
           }
+	 if(replace_mode && replace_phase == 2 && rep_match_row == top + i){
+    	    if(rep_match_col >= left && rep_match_col - left < COLS){
+              attron(A_REVERSE);
+              mvaddnstr(i, rep_match_col - left, replace_search, replace_search_len);
+              attroff(A_REVERSE);
+             }
+          }
          }
 
-           if(search_mode){						/* 搜索时，在状态栏上面一行显示搜索框 */
-	     mvprintw(LINES - 2, 0, "搜索: %s", search_buf);
-	     clrtoeol();
+	  if(replace_mode){
+           if(replace_phase == 0){
+             mvprintw(LINES - 2, 0, "查找: %s", replace_search);
+           }else if (replace_phase == 1){
+             mvprintw(LINES - 2, 0, "替换为: %s", replace_repl);
+           }else{
+             mvprintw(LINES - 2, 0, "Y=替换 N=跳过 A=全部 Enter/Ctrl-P=切换 Esc=退出");
            }
+           clrtoeol();
+         }else if (search_mode){
+           mvprintw(LINES - 2, 0, "搜索: %s", search_buf);
+           clrtoeol();
+         }
 
+		/* 状态栏 */
 
-	 if(confirm_quit){				/* 状态栏 */
-         mvprintw(LINES - 1, 0, " 文件未保存！再按 Ctrl-Q 强制退出，其他键取消 ");
-         }else if(search_mode){
-	  mvprintw(LINES - 1, 0, " SEARCH ");
+         if(search_mode){						/* 搜索时，在状态栏上面一行显示搜索框 */
+	   mvprintw(LINES - 2, 0, "搜索: %s", search_buf);
+	   clrtoeol();
+         }
+	 if(confirm_quit){
+           mvprintw(LINES - 1, 0, " 文件未保存！再按 Ctrl-Q 强制退出，其他键取消 ");
+         }else if(replace_mode){
+	   mvprintw(LINES - 1, 0 " REPLACE ");
+	 }else if(search_mode){
+	   mvprintw(LINES - 1, 0, " SEARCH ");
 	 }else{
            mvprintw(LINES - 1, 0, " %s | %s | %d:%d ", filename, modified ? "Modified" : "Saved", row + 1 ,col + 1);
          }
 	 clrtoeol();
+
 
 	 move(row - top, col - left);
 	 refresh();
@@ -281,9 +325,113 @@
            continue;
          }
 
+	if(replace_mode){
+	  if(ch == 0x1b || ch == 0x03){           /* Esc 或 Ctrl-C 退出 */
+          replace_mode = 0;
+          continue;
+          }
+    	  if(replace_phase == 0){
+            if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
+              if(replace_search_len > 0)
+	        replace_phase = 1;
+              }else if(ch == KEY_BACKSPACE || ch == 127){
+                if(replace_search_len > 0){
+                  replace_search_len--;
+                  replace_search[replace_search_len] = '\0';
+                }
+              }else if(ch >= 32 && ch <= 126){
+                if(replace_search_len < 255){
+                  replace_search[replace_search_len++] = ch;
+                  replace_search[replace_search_len] = '\0';
+                }
+              }
+       	      continue;
+           }
+	if(replace_phase == 1){
+          if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
+            replace_phase = 2;
+            rep_start_row = row;
+            rep_start_col = col;
+            rep_match_row = -1;
+            rep_match_col = -1;
+	    if(find_next(&buf, replace_search, rep_start_row, rep_start_col, &rep_match_row, &rep_match_col)){
+                row = rep_match_row;
+                col = rep_match_col;
+            }
+          }else if(ch == KEY_BACKSPACE || ch == 127){
+            if(replace_repl_len > 0){
+              replace_repl_len--;
+              replace_repl[replace_repl_len] = '\0';
+            }
+          }else if(ch >= 32 && ch <= 126){
+            if(replace_repl_len < 255){
+              replace_repl[replace_repl_len++] = ch;
+              replace_repl[replace_repl_len] = '\0';
+            }
+          }
+          continue;
+        }
+        if(replace_phase == 2){
+          if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
+            int sr = (rep_match_row >= 0) ? rep_match_row : rep_start_row;
+            int sc = (rep_match_col >= 0) ? rep_match_col + 1 : rep_start_col;
+	    if(find_next(&buf, replace_search, sr, sc, &rep_match_row, &rep_match_col)){
+              row = rep_match_row;
+              col = rep_match_col;
+            }else{
+              rep_match_row = -1;
+              rep_match_col = -1;
+            }
+          }else if (ch == 0x10){                     /* Ctrl-P 上一个 */
+            int pr = (rep_match_row >= 0) ? rep_match_row : rep_start_row;
+            int pc = (rep_match_col >= 0) ? rep_match_col : rep_start_col;
+	    if(find_prev(&buf, replace_search, pr, pc, &rep_match_row, &rep_match_col)){
+              row = rep_match_row;
+              col = rep_match_col;
+            }
+          }else if(ch == 'Y' || ch == 'y'){
+            if(rep_match_row >= 0){
+              buffer_replace(&buf, rep_match_row, rep_match_col, replace_search_len, replace_repl);
+              modified = 1;
+              rep_start_row = rep_match_row;
+              rep_start_col = rep_match_col + replace_repl_len;
+            }
+ 	    if(find_next(&buf, replace_search, rep_start_row, rep_start_col, &rep_match_row, &rep_match_col)){
+              row = rep_match_row;
+              col = rep_match_col;
+            }else{
+              rep_match_row = -1;
+              rep_match_col = -1;
+            }
+          }else if(ch == 'N' || ch == 'n'){
+            if(rep_match_row >= 0){
+              rep_start_row = rep_match_row;
+              rep_start_col = rep_match_col + 1;
+            }
+	    if(find_next(&buf, replace_search, rep_start_row, rep_start_col, &rep_match_row, &rep_match_col)){
+              row = rep_match_row;
+              col = rep_match_col;
+            }else{
+              rep_match_row = -1;
+              rep_match_col = -1;
+            }
+          }else if(ch == 'A' || ch == 'a'){
+            int r = rep_start_row, c = rep_start_col;
+	    while(find_next(&buf, replace_search, r, c, &r, &c)){
+              buffer_replace(&buf, r, c, replace_search_len, replace_repl);
+              modified = 1;
+              c += replace_repl_len;
+            }
+            replace_mode = 0;
+          }
+          continue;
+        }
+      }
 
-	 if(search_mode){  		  /* 搜索模式 */
-         if(ch == 0x1b){                  /* Esc 退出搜索 */
+	if(search_mode){
+   	  mvprintw(LINES - 2, 0, "搜索: %s", search_buf);
+          clrtoeol();  		 		 /* 搜索模式 */
+         if(ch == 0x1b){                  		/* Esc 退出搜索 */
            search_mode = 0;
            match_row = -1;
            match_col = -1;
@@ -350,6 +498,17 @@
          }else if(ch == KEY_RIGHT && col < strlen(buf.lines[row])){
              col++;
          }else if(ch == KEY_RESIZE){		/* 缩放窗口 */
+	   resizeterm(0, 0);			/* 重新读取终端大小 */
+   	   clear();
+	 }else if(ch == 0x12){               /* Ctrl-R 进入替换 */
+    	   replace_mode = 1;
+    	   replace_phase = 0;
+           replace_search_len = 0;
+   	   replace_search[0] = '\0';
+   	   replace_repl_len = 0;
+   	   replace_repl[0] = '\0';
+     	   rep_match_row = -1;
+           rep_match_col = -1;
 	 }else if(ch == 0x06){                        /* Ctrl-F进入搜索模式 */
            search_mode = 1;
            search_len = 0;
