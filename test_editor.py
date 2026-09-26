@@ -3,7 +3,7 @@ import re
 import time
 import pexpect
 
-EDITOR = "./dedit"
+EDITOR = "./dedit2"
 
 KEYMAP = {
     "Enter":     "\r",
