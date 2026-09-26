@@ -344,6 +344,79 @@
     for (i = 0; i <= n; i++) free(parts[i]);
     free(parts);
   }
+  typedef struct{
+    Buffer buf;
+    int row;
+    int col;
+   }Snapshot;
+
+   Snapshot *snapshot_create(Buffer *b, int row, int col){
+      Snapshot *s = malloc(sizeof(Snapshot));
+      int i;
+      Buffer_init(&s->buf);
+      for (i = 0; i < b->count; i++){
+        Buffer_lineadd(&s->buf, b->lines[i]);
+      }
+      s->row = row;
+      s->col = col;
+      return s;
+   }
+
+  void snapshot_free(Snapshot *s){
+    Buffer_free(&s->buf);
+    free(s);
+  }
+
+  void snapshot_restore(Buffer *b, Snapshot *s, int *row, int *col){
+    int i;
+    Buffer_free(b);
+    Buffer_init(b);
+    for(i = 0; i < s->buf.count; i++){
+        Buffer_lineadd(b, s->buf.lines[i]);
+    }
+    *row = s->row;
+    *col = s->col;
+  }
+
+  #define MAX_UNDO 1000
+  Snapshot *undo_stack[MAX_UNDO];
+  int undo_top = 0;
+  Snapshot *redo_stack[MAX_UNDO];
+  int redo_top = 0;
+
+  void undo_push(Buffer *b, int row, int col){
+    if(undo_top >= MAX_UNDO)
+      return;
+    undo_stack[undo_top++] = snapshot_create(b, row, col);
+  }
+
+  void undo_clear_redo(void){
+    while(redo_top > 0){
+        snapshot_free(redo_stack[--redo_top]);
+    }
+  }
+
+  void undo_do(Buffer *b, int *row, int *col){
+    if(undo_top == 0)
+       return;
+
+    redo_stack[redo_top++] = snapshot_create(b, *row, *col);
+
+    Snapshot *s = undo_stack[--undo_top];
+    snapshot_restore(b, s, row, col);
+    snapshot_free(s);
+    }
+
+  void redo_do(Buffer *b, int *row, int *col){
+    if(redo_top == 0)
+      return;
+
+    undo_stack[undo_top++] = snapshot_create(b, *row, *col);
+
+    Snapshot *s = redo_stack[--redo_top];
+    snapshot_restore(b, s, row, col);
+    snapshot_free(s);
+  }
 
 
 
@@ -376,6 +449,7 @@
 	int match_row = -1, match_col = -1;
 	int search_start_row = 0, search_start_col = 0;
 	int screen_h;
+	int sr1 = 0, sc1 = 0, sr2 = 0, sc2 = 0;
 	int replace_mode = 0;
 	int replace_phase = 0;       /* 0=输入查找词 1=输入替换词 2=逐个确认 */
 	char replace_search[256] = "";
@@ -410,6 +484,13 @@
 	    left = col - COLS + 1;
 	  }
 
+	  sr1 = 0; sc1 = 0; sr2 = 0; sc2 = 0;
+          if(sel_active){
+            sr1 = sel_anchor_row; sc1 = sel_anchor_col;
+            sr2 = row; sc2 = col;
+            sel_normalize(&sr1, &sc1, &sr2, &sc2);
+          }
+
 	  erase();			/* 重绘屏幕 */
 	  for(i = 0; i < screen_h && top + i < buf.count; i++){
 	    int line_len = strlen(buf.lines[top + i]);
@@ -434,6 +515,24 @@
               attroff(A_REVERSE);
              }
           }
+	 if(sel_active && top + i >= sr1 && top + i <= sr2){
+           int li = top + i;
+           int hs = (li == sr1) ? sc1 : 0;
+           int he = (li == sr2) ? sc2 : strlen(buf.lines[li]);
+	   if(he > hs){
+             int x = hs - left;
+             int w = he - hs;
+	     if(x < 0){
+               w += x;
+	       x = 0;
+             }
+             if(x < COLS && w > 0){
+               attron(A_REVERSE);
+               mvaddnstr(i, x, buf.lines[li] + hs, w);
+               attroff(A_REVERSE);
+             }
+           }
+         }
          }
 
 	  if(replace_mode){
@@ -549,6 +648,8 @@
             }
           }else if(ch == 'Y' || ch == 'y'){
             if(rep_match_row >= 0){
+	      undo_push(&buf, row, col);
+              undo_clear_redo();
               buffer_replace(&buf, rep_match_row, rep_match_col, replace_search_len, replace_repl);
               modified = 1;
               rep_start_row = rep_match_row;
@@ -574,6 +675,8 @@
               rep_match_col = -1;
             }
           }else if(ch == 'A' || ch == 'a'){
+	    undo_push(&buf, row, col);
+            undo_clear_redo();
             int r = rep_start_row, c = rep_start_col;
 	    while(find_next(&buf, replace_search, r, c, &r, &c)){
               buffer_replace(&buf, r, c, replace_search_len, replace_repl);
@@ -692,6 +795,8 @@
           clipboard_set(sel);
           free(sel);
 
+          undo_push(&buf, row, col);
+          undo_clear_redo();
           buffer_delete_range(&buf, r1, c1, r2, c2);
           row = r1;
           col = c1;
@@ -700,8 +805,10 @@
           }
         }else if(ch == 0x16){                    /* Ctrl-V 粘贴 */
           if(clipboard != NULL){
-          buffer_paste(&buf, &row, &col, clipboard);
-          modified = 1;
+	   undo_push(&buf, row, col);
+           undo_clear_redo();
+           buffer_paste(&buf, &row, &col, clipboard);
+           modified = 1;
           }
 	}else if(ch == 0x12){               /* Ctrl-R 进入替换 */
     	  replace_mode = 1;
@@ -720,13 +827,17 @@
           match_col = -1;
           search_start_row = row;
           search_start_col = col;
-         }else if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){
+         }else if(ch == '\n' || ch == '\r' || ch == KEY_ENTER){ 	/* 回车换行 */
+	    undo_push(&buf, row, col);
+            undo_clear_redo();
 	    Buffer_line_enter(&buf, row, col);
 	    row++;
 	    col = 0;
 	    modified = 1;
 	 }else if(ch == KEY_BACKSPACE || ch == 127){		/* BACKSPACE键 */
-	        if(col > 0){
+	        undo_push(&buf, row, col);
+                undo_clear_redo();
+                if(col > 0){
 	         Buffer_chardel(&buf, row, col - 1);
 	         col--;
 		 modified = 1;
@@ -738,6 +849,8 @@
 		 modified = 1;
 		}
 	  }else if(ch == KEY_DC){			/* DELETE键位 */
+		undo_push(&buf, row, col);
+   	        undo_clear_redo();
 	        int len = strlen(buf.lines[row]);
 	        if(col < len) {
                  Buffer_chardel(&buf, row, col);
@@ -747,10 +860,18 @@
 		  modified = 1;
 		}
 	  }else if(ch >= 32 && ch <= 126){		/* 输入可打印字符 */
-		Buffer_charinsert(&buf, row, col, ch);
+	        undo_push(&buf, row, col);
+                undo_clear_redo();
+         	Buffer_charinsert(&buf, row, col, ch);
 		col++;
 		modified = 1;
-	  }
+	  }else if(ch == 0x1a){        /* Ctrl-Z 撤回 */
+                undo_do(&buf, &row, &col);
+                modified = 1;
+          }else if(ch == 0x19){        /* Ctrl-Y 重做 */
+                redo_do(&buf, &row, &col);
+                modified = 1;
+          }
 
 	if(col > strlen(buf.lines[row])){	/* 若此行字数太少，则缩减光标活动范围 */
 	   col = strlen(buf.lines[row]);
