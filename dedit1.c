@@ -12,7 +12,7 @@
    }Buffer;
 
   void Buffer_init(Buffer *b){        		          /* Buffer初始化 */
-	b->cap = 30;
+	b->cap = 1024;
         b->lines = malloc(b->cap * sizeof(char*));
         b->count = 0;
     }
